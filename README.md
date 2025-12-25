@@ -4,9 +4,9 @@ DynamoDB tables for BBWS multi-tenant platform.
 
 ## Tables
 
-- **tenants** - Organizations and user management
-- **products** - Subscription tiers and features
-- **campaigns** - Marketing campaigns
+- **tenants** - Organizations and user management (3 GSIs)
+- **products** - Subscription tiers and features (2 GSIs)
+- **campaigns** - Marketing campaigns (3 GSIs)
 
 ## Environments
 
@@ -32,48 +32,20 @@ DynamoDB tables for BBWS multi-tenant platform.
 │           └── dev.tfvars           # DEV environment config
 ├── scripts/
 │   └── validate_dynamodb_dev.py     # Post-deployment validation
-├── 0-create-repository.sh           # (Not needed - repo exists)
-├── 1-setup-aws-profile.sh           # One-time: Configure AWS CLI
-├── 2-setup-aws-infrastructure.sh    # One-time: Create OIDC, IAM role, S3, DynamoDB
-├── 3-setup-github.sh                # One-time: Configure GitHub secrets
-├── 4-trigger-deployment.sh          # Trigger and monitor deployment
-├── check-setup.sh                   # Diagnostic: Check what's configured
-├── SETUP_GUIDE.md                   # Quick setup guide (15 min)
-├── AUTOMATED_SETUP.md               # Detailed setup instructions
 └── README.md                        # This file
-```
-
-## Quick Start
-
-### First-Time Setup (15 minutes)
-
-Run these scripts in order:
-
-```bash
-# Step 1: Configure AWS CLI profile for DEV
-./1-setup-aws-profile.sh
-
-# Step 2: Create AWS infrastructure (OIDC, IAM role, S3, DynamoDB)
-./2-setup-aws-infrastructure.sh BigBeardWebSolutions
-
-# Step 3: Configure GitHub secrets and copy workflow files
-./3-setup-github.sh BigBeardWebSolutions 2_1_bbws_dynamodb_schemas
-
-# Step 4: Trigger deployment and monitor progress
-./4-trigger-deployment.sh BigBeardWebSolutions 2_1_bbws_dynamodb_schemas dynamodb
-```
-
-See `SETUP_GUIDE.md` for detailed instructions.
-
-### Check Current Setup
-
-```bash
-./check-setup.sh BigBeardWebSolutions 2_1_bbws_dynamodb_schemas
 ```
 
 ## Deployment
 
-Deployment is automated via GitHub Actions. See `.github/workflows/deploy-dev.yml`
+Deployment is automated via GitHub Actions.
+
+### Trigger Deployment
+
+1. Go to **Actions** tab in GitHub
+2. Select **Deploy to DEV** workflow
+3. Click **Run workflow**
+4. Select component: `dynamodb`
+5. Click **Run workflow**
 
 ### Manual Deployment
 
@@ -90,7 +62,12 @@ terraform apply -var-file=environments/dev.tfvars
 python3 scripts/validate_dynamodb_dev.py
 ```
 
-## Documentation
+## Features
 
-- [LLD Document](../2_bbws_docs/LLDs/2.1.8_LLD_S3_and_DynamoDB.md)
-- [Setup Guide](../2_bbws_docs/LLDs/project-plan-1/github-workflows-ready-to-deploy/AUTOMATED_SETUP.md)
+- ✅ PAY_PER_REQUEST billing mode (on-demand)
+- ✅ Point-in-Time Recovery enabled
+- ✅ DynamoDB Streams enabled (NEW_AND_OLD_IMAGES)
+- ✅ 8 Global Secondary Indexes across 3 tables
+- ✅ Multi-environment support (DEV/SIT/PROD)
+- ✅ Automated deployment via GitHub Actions
+- ✅ Post-deployment validation
