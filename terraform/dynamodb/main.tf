@@ -20,13 +20,9 @@ terraform {
     }
   }
 
-  backend "s3" {
-    bucket         = "bbws-terraform-state-dev"
-    key            = "dynamodb/terraform.tfstate"
-    region         = "eu-west-1"
-    dynamodb_table = "terraform-state-lock-dev"
-    encrypt        = true
-  }
+  # Backend configuration provided via -backend-config flags in CI/CD
+  # This allows different environments (dev/sit/prod) to use different backends
+  backend "s3" {}
 }
 
 provider "aws" {
