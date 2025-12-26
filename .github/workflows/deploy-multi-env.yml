@@ -1,0 +1,482 @@
+# ============================================================================
+# MULTI-ENVIRONMENT DEPLOYMENT WORKFLOW
+# ============================================================================
+# Purpose: Deploy infrastructure across DEV/SIT/PROD environments
+# Trigger: Manual workflow dispatch with environment selection
+# Promotion Flow: DEV → SIT → PROD (NEVER skip SIT)
+# Region Mapping: DEV/SIT=eu-west-1, PROD=af-south-1
+# ============================================================================
+
+name: Deploy Infrastructure (Multi-Environment)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment for deployment'
+        type: choice
+        required: true
+        options:
+          - dev
+          - sit
+          - prod
+      component:
+        description: 'Component to deploy'
+        type: choice
+        required: true
+        options:
+          - dynamodb
+          - s3
+          - both
+      skip_validation:
+        description: 'Skip post-deployment validation'
+        type: boolean
+        required: false
+        default: false
+
+# Permissions for OIDC authentication
+permissions:
+  id-token: write   # Required for AWS OIDC authentication
+  contents: read    # Required to checkout code
+  actions: read     # Required for artifacts
+
+env:
+  TF_VERSION: 1.6.0
+
+jobs:
+  # --------------------------------------------------------------------------
+  # JOB 0: ENVIRONMENT SETUP AND VALIDATION
+  # --------------------------------------------------------------------------
+  setup:
+    name: Environment Setup
+    runs-on: ubuntu-latest
+    outputs:
+      region: ${{ steps.config.outputs.region }}
+      account_id: ${{ steps.config.outputs.account_id }}
+      role_secret: ${{ steps.config.outputs.role_secret }}
+      backend_bucket: ${{ steps.config.outputs.backend_bucket }}
+      backend_table: ${{ steps.config.outputs.backend_table }}
+
+    steps:
+      - name: Set environment configuration
+        id: config
+        run: |
+          echo "=================================================="
+          echo "ENVIRONMENT CONFIGURATION"
+          echo "=================================================="
+          echo "Target Environment: ${{ inputs.environment }}"
+          echo "Component: ${{ inputs.component }}"
+          echo ""
+
+          case "${{ inputs.environment }}" in
+            dev)
+              echo "region=eu-west-1" >> $GITHUB_OUTPUT
+              echo "account_id=536580886816" >> $GITHUB_OUTPUT
+              echo "role_secret=AWS_ROLE_DEV" >> $GITHUB_OUTPUT
+              echo "backend_bucket=bbws-terraform-state-dev" >> $GITHUB_OUTPUT
+              echo "backend_table=terraform-state-lock-dev" >> $GITHUB_OUTPUT
+              echo "Environment: DEV (Development)"
+              echo "Region: eu-west-1 (Ireland)"
+              echo "Account: 536580886816"
+              ;;
+            sit)
+              echo "region=eu-west-1" >> $GITHUB_OUTPUT
+              echo "account_id=815856636111" >> $GITHUB_OUTPUT
+              echo "role_secret=AWS_ROLE_SIT" >> $GITHUB_OUTPUT
+              echo "backend_bucket=bbws-terraform-state-sit" >> $GITHUB_OUTPUT
+              echo "backend_table=terraform-state-lock-sit" >> $GITHUB_OUTPUT
+              echo "Environment: SIT (Staging/Integration Testing)"
+              echo "Region: eu-west-1 (Ireland)"
+              echo "Account: 815856636111"
+              ;;
+            prod)
+              echo "region=af-south-1" >> $GITHUB_OUTPUT
+              echo "account_id=093646564004" >> $GITHUB_OUTPUT
+              echo "role_secret=AWS_ROLE_PROD" >> $GITHUB_OUTPUT
+              echo "backend_bucket=bbws-terraform-state-prod" >> $GITHUB_OUTPUT
+              echo "backend_table=terraform-state-lock-prod" >> $GITHUB_OUTPUT
+              echo "Environment: PROD (Production)"
+              echo "Region: af-south-1 (Cape Town)"
+              echo "Account: 093646564004"
+              echo "⚠️  PRODUCTION DEPLOYMENT - Requires approval"
+              ;;
+          esac
+          echo "=================================================="
+
+      - name: Promotion workflow validation
+        run: |
+          echo "=================================================="
+          echo "PROMOTION WORKFLOW CHECK"
+          echo "=================================================="
+          echo "✅ DEV: No restrictions - deploy anytime"
+          echo "⚠️  SIT: Should be promoted from tested DEV code"
+          echo "🔒 PROD: MUST be promoted from validated SIT code"
+          echo ""
+          echo "Current deployment: ${{ inputs.environment }}"
+
+          if [ "${{ inputs.environment }}" == "prod" ]; then
+            echo ""
+            echo "⚠️  CRITICAL: Deploying to PROD"
+            echo "Verify that:"
+            echo "  1. Code has been tested in DEV"
+            echo "  2. Code has been validated in SIT"
+            echo "  3. All integration tests passed in SIT"
+            echo "  4. Approval has been obtained"
+          fi
+          echo "=================================================="
+
+  # --------------------------------------------------------------------------
+  # JOB 1: DEPLOY DYNAMODB
+  # --------------------------------------------------------------------------
+  deploy-dynamodb:
+    name: Deploy DynamoDB (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    needs: setup
+    if: inputs.component == 'dynamodb' || inputs.component == 'both'
+    environment: ${{ inputs.environment }}  # Uses GitHub environment protection rules
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------------------------
+      # AWS OIDC AUTHENTICATION
+      # --------------------------------------------------------------------------
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets[needs.setup.outputs.role_secret] }}
+          aws-region: ${{ needs.setup.outputs.region }}
+          role-session-name: github-actions-${{ inputs.environment }}-${{ github.run_number }}
+
+      - name: Verify AWS identity
+        run: |
+          echo "=================================================="
+          echo "AWS IDENTITY VERIFICATION"
+          echo "=================================================="
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          REGION="${{ needs.setup.outputs.region }}"
+          ARN=$(aws sts get-caller-identity --query Arn --output text)
+
+          echo "Account ID: $ACCOUNT"
+          echo "Region: $REGION"
+          echo "User ARN: $ARN"
+          echo ""
+
+          # Verify we're in the correct account
+          if [ "$ACCOUNT" != "${{ needs.setup.outputs.account_id }}" ]; then
+            echo "❌ ERROR: Account mismatch!"
+            echo "Expected: ${{ needs.setup.outputs.account_id }}"
+            echo "Got: $ACCOUNT"
+            exit 1
+          fi
+
+          echo "✅ AWS authentication successful"
+          echo "=================================================="
+
+      # --------------------------------------------------------------------------
+      # PRE-DEPLOYMENT VALIDATION
+      # --------------------------------------------------------------------------
+      - name: Pre-deployment snapshot (DynamoDB)
+        run: |
+          echo "=================================================="
+          echo "PRE-DEPLOYMENT SNAPSHOT - DynamoDB Tables"
+          echo "=================================================="
+          aws dynamodb list-tables \
+            --region ${{ needs.setup.outputs.region }} \
+            --query 'TableNames' \
+            --output json | tee dynamodb-before.json
+
+          echo ""
+          echo "Existing tables:"
+          cat dynamodb-before.json
+          echo "=================================================="
+
+      # --------------------------------------------------------------------------
+      # TERRAFORM SETUP AND DEPLOYMENT
+      # --------------------------------------------------------------------------
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform init (DynamoDB)
+        working-directory: terraform/dynamodb
+        run: |
+          echo "=================================================="
+          echo "TERRAFORM INIT - DynamoDB"
+          echo "=================================================="
+          echo "Backend Configuration:"
+          echo "  Bucket: ${{ needs.setup.outputs.backend_bucket }}"
+          echo "  Key: ${{ github.repository }}/dynamodb/terraform.tfstate"
+          echo "  Region: ${{ needs.setup.outputs.region }}"
+          echo "  DynamoDB Table: ${{ needs.setup.outputs.backend_table }}"
+          echo "=================================================="
+
+          terraform init \
+            -backend-config="bucket=${{ needs.setup.outputs.backend_bucket }}" \
+            -backend-config="key=${{ github.repository }}/dynamodb/terraform.tfstate" \
+            -backend-config="region=${{ needs.setup.outputs.region }}" \
+            -backend-config="dynamodb_table=${{ needs.setup.outputs.backend_table }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform plan (DynamoDB)
+        working-directory: terraform/dynamodb
+        run: |
+          terraform plan \
+            -var-file=environments/${{ inputs.environment }}.tfvars \
+            -out=tfplan \
+            -no-color \
+            | tee plan_output.txt
+
+      - name: Display plan summary
+        working-directory: terraform/dynamodb
+        run: |
+          echo "=================================================="
+          echo "TERRAFORM PLAN SUMMARY - DynamoDB"
+          echo "=================================================="
+          grep -E "Plan:|No changes" plan_output.txt || echo "See full plan above"
+          echo "=================================================="
+
+      - name: Terraform apply (DynamoDB)
+        working-directory: terraform/dynamodb
+        run: |
+          echo "Applying Terraform plan to ${{ inputs.environment }}..."
+          terraform apply -auto-approve tfplan
+
+      - name: Capture Terraform outputs (DynamoDB)
+        id: outputs_dynamodb
+        working-directory: terraform/dynamodb
+        run: |
+          echo "=================================================="
+          echo "TERRAFORM OUTPUTS - DynamoDB"
+          echo "=================================================="
+          terraform output -json | tee terraform-outputs.json
+          terraform output
+          echo "=================================================="
+
+      - name: Upload deployment outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynamodb-outputs-${{ inputs.environment }}-${{ github.run_number }}
+          path: |
+            terraform/dynamodb/terraform-outputs.json
+            terraform/dynamodb/plan_output.txt
+          retention-days: 90
+
+      # --------------------------------------------------------------------------
+      # POST-DEPLOYMENT VALIDATION
+      # --------------------------------------------------------------------------
+      - name: Post-deployment snapshot (DynamoDB)
+        if: inputs.skip_validation == false
+        run: |
+          echo "=================================================="
+          echo "POST-DEPLOYMENT SNAPSHOT - DynamoDB Tables"
+          echo "=================================================="
+          aws dynamodb list-tables \
+            --region ${{ needs.setup.outputs.region }} \
+            --query 'TableNames' \
+            --output json | tee dynamodb-after.json
+
+          echo ""
+          echo "Tables after deployment:"
+          cat dynamodb-after.json
+          echo "=================================================="
+
+      - name: Compare deployment changes (DynamoDB)
+        if: inputs.skip_validation == false
+        run: |
+          echo "=================================================="
+          echo "DEPLOYMENT COMPARISON - DynamoDB"
+          echo "=================================================="
+          echo "Before:"
+          cat dynamodb-before.json
+          echo ""
+          echo "After:"
+          cat dynamodb-after.json
+          echo ""
+          echo "New/Modified tables will be visible in the diff above"
+          echo "=================================================="
+
+  # --------------------------------------------------------------------------
+  # JOB 2: DEPLOY S3
+  # --------------------------------------------------------------------------
+  deploy-s3:
+    name: Deploy S3 (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    needs: setup
+    if: inputs.component == 's3' || inputs.component == 'both'
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets[needs.setup.outputs.role_secret] }}
+          aws-region: ${{ needs.setup.outputs.region }}
+          role-session-name: github-actions-${{ inputs.environment }}-${{ github.run_number }}
+
+      - name: Verify AWS identity
+        run: |
+          echo "=================================================="
+          echo "AWS IDENTITY VERIFICATION"
+          echo "=================================================="
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "Account ID: $ACCOUNT"
+          echo "Region: ${{ needs.setup.outputs.region }}"
+
+          if [ "$ACCOUNT" != "${{ needs.setup.outputs.account_id }}" ]; then
+            echo "❌ ERROR: Account mismatch!"
+            exit 1
+          fi
+
+          echo "✅ AWS authentication successful"
+          echo "=================================================="
+
+      - name: Pre-deployment snapshot (S3)
+        run: |
+          echo "=================================================="
+          echo "PRE-DEPLOYMENT SNAPSHOT - S3 Buckets"
+          echo "=================================================="
+          aws s3 ls | tee s3-before.txt
+          echo "=================================================="
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform init (S3)
+        working-directory: terraform/s3
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ needs.setup.outputs.backend_bucket }}" \
+            -backend-config="key=${{ github.repository }}/s3/terraform.tfstate" \
+            -backend-config="region=${{ needs.setup.outputs.region }}" \
+            -backend-config="dynamodb_table=${{ needs.setup.outputs.backend_table }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform plan (S3)
+        working-directory: terraform/s3
+        run: |
+          terraform plan \
+            -var-file=environments/${{ inputs.environment }}.tfvars \
+            -out=tfplan \
+            -no-color \
+            | tee plan_output.txt
+
+      - name: Display plan summary
+        working-directory: terraform/s3
+        run: |
+          echo "=================================================="
+          echo "TERRAFORM PLAN SUMMARY - S3"
+          echo "=================================================="
+          grep -E "Plan:|No changes" plan_output.txt || echo "See full plan above"
+          echo "=================================================="
+
+      - name: Terraform apply (S3)
+        working-directory: terraform/s3
+        run: |
+          echo "Applying Terraform plan to ${{ inputs.environment }}..."
+          terraform apply -auto-approve tfplan
+
+      - name: Capture Terraform outputs (S3)
+        working-directory: terraform/s3
+        run: |
+          echo "=================================================="
+          echo "TERRAFORM OUTPUTS - S3"
+          echo "=================================================="
+          terraform output -json | tee terraform-outputs.json
+          terraform output
+          echo "=================================================="
+
+      - name: Upload deployment outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: s3-outputs-${{ inputs.environment }}-${{ github.run_number }}
+          path: |
+            terraform/s3/terraform-outputs.json
+            terraform/s3/plan_output.txt
+          retention-days: 90
+
+      - name: Post-deployment snapshot (S3)
+        if: inputs.skip_validation == false
+        run: |
+          echo "=================================================="
+          echo "POST-DEPLOYMENT SNAPSHOT - S3 Buckets"
+          echo "=================================================="
+          aws s3 ls | tee s3-after.txt
+          echo "=================================================="
+
+      - name: Compare deployment changes (S3)
+        if: inputs.skip_validation == false
+        run: |
+          echo "=================================================="
+          echo "DEPLOYMENT COMPARISON - S3"
+          echo "=================================================="
+          echo "Before:"
+          cat s3-before.txt
+          echo ""
+          echo "After:"
+          cat s3-after.txt
+          echo "=================================================="
+
+  # --------------------------------------------------------------------------
+  # JOB 3: DEPLOYMENT SUMMARY
+  # --------------------------------------------------------------------------
+  summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-dynamodb, deploy-s3]
+    if: always()
+
+    steps:
+      - name: Generate deployment summary
+        run: |
+          echo "=================================================="
+          echo "DEPLOYMENT SUMMARY"
+          echo "=================================================="
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Component: ${{ inputs.component }}"
+          echo "Region: ${{ needs.setup.outputs.region }}"
+          echo "Account: ${{ needs.setup.outputs.account_id }}"
+          echo ""
+          echo "Job Results:"
+          echo "  DynamoDB Deploy: ${{ needs.deploy-dynamodb.result || 'skipped' }}"
+          echo "  S3 Deploy: ${{ needs.deploy-s3.result || 'skipped' }}"
+          echo ""
+          echo "Workflow Run: ${{ github.run_id }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "=================================================="
+
+          # Check if any job failed
+          if [ "${{ needs.deploy-dynamodb.result }}" == "failure" ] || \
+             [ "${{ needs.deploy-s3.result }}" == "failure" ]; then
+            echo "❌ DEPLOYMENT FAILED"
+            echo "Check job logs above for details"
+            exit 1
+          else
+            echo "✅ DEPLOYMENT SUCCESSFUL"
+
+            if [ "${{ inputs.environment }}" == "dev" ]; then
+              echo ""
+              echo "Next Steps:"
+              echo "  1. Validate resources in DEV"
+              echo "  2. When ready, promote to SIT"
+            elif [ "${{ inputs.environment }}" == "sit" ]; then
+              echo ""
+              echo "Next Steps:"
+              echo "  1. Run integration tests in SIT"
+              echo "  2. When validated, promote to PROD"
+            elif [ "${{ inputs.environment }}" == "prod" ]; then
+              echo ""
+              echo "✅ PRODUCTION DEPLOYMENT COMPLETE"
+              echo "  - Monitor CloudWatch for any issues"
+              echo "  - Verify health checks are passing"
+            fi
+          fi

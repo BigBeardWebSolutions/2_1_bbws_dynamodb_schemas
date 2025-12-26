@@ -1,0 +1,36 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::536580886816:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": [
+            "repo:BigBeardWebSolutions/0_playpen:*",
+            "repo:BigBeardWebSolutions/2_1_bbws_dynamodb_schemas:*",
+            "repo:BigBeardWebSolutions/2_1_bbws_web_public:*",
+            "repo:BigBeardWebSolutions/2_bbws_agents:*",
+            "repo:BigBeardWebSolutions/2_bbws_docs:*",
+            "repo:BigBeardWebSolutions/2_bbws_ecs_operations:*",
+            "repo:BigBeardWebSolutions/2_bbws_ecs_terraform:*",
+            "repo:BigBeardWebSolutions/2_bbws_ecs_tests:*",
+            "repo:BigBeardWebSolutions/2_bbws_tenant_provisioner:*",
+            "repo:BigBeardWebSolutions/2_bbws_wordpress_container:*",
+            "repo:BigBeardWebSolutions/3_forms_microservices:*",
+            "repo:BigBeardWebSolutions/3_landing_page_builder_s3_writer:*",
+            "repo:BigBeardWebSolutions/3_landing_page_builder_ui:*",
+            "repo:BigBeardWebSolutions/agentic_architect:*",
+            "repo:BigBeardWebSolutions/skills:*"
+          ]
+        }
+      }
+    }
+  ]
+}
