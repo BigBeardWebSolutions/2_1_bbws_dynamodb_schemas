@@ -1,0 +1,156 @@
+{
+  "tableName": "tenants",
+  "description": "Customer tenant records with email-based identity",
+  "primaryKey": {
+    "partitionKey": {
+      "name": "PK",
+      "type": "S",
+      "pattern": "TENANT#{tenantId}"
+    },
+    "sortKey": {
+      "name": "SK",
+      "type": "S",
+      "pattern": "METADATA"
+    }
+  },
+  "attributes": [
+    {
+      "name": "PK",
+      "type": "S",
+      "required": true,
+      "description": "Partition key: TENANT#{tenantId}"
+    },
+    {
+      "name": "SK",
+      "type": "S",
+      "required": true,
+      "description": "Sort key: METADATA"
+    },
+    {
+      "name": "id",
+      "type": "S",
+      "required": true,
+      "description": "Unique tenant identifier (UUID v4)"
+    },
+    {
+      "name": "email",
+      "type": "S",
+      "required": true,
+      "description": "Customer email address (unique)"
+    },
+    {
+      "name": "status",
+      "type": "S",
+      "required": true,
+      "enum": ["UNVALIDATED", "VALIDATED", "REGISTERED", "SUSPENDED"],
+      "description": "Tenant lifecycle status"
+    },
+    {
+      "name": "organizationName",
+      "type": "S",
+      "required": false,
+      "description": "Organization name (for business tenants)"
+    },
+    {
+      "name": "destinationEmail",
+      "type": "S",
+      "required": false,
+      "description": "Destination email for form submissions"
+    },
+    {
+      "name": "active",
+      "type": "BOOL",
+      "required": true,
+      "default": true,
+      "description": "Soft delete flag"
+    },
+    {
+      "name": "dateCreated",
+      "type": "S",
+      "required": true,
+      "format": "ISO 8601",
+      "description": "Creation timestamp"
+    },
+    {
+      "name": "dateLastUpdated",
+      "type": "S",
+      "required": true,
+      "format": "ISO 8601",
+      "description": "Last update timestamp"
+    },
+    {
+      "name": "lastUpdatedBy",
+      "type": "S",
+      "required": true,
+      "description": "User/system email that made last update"
+    }
+  ],
+  "globalSecondaryIndexes": [
+    {
+      "indexName": "EmailIndex",
+      "partitionKey": {
+        "name": "email",
+        "type": "S"
+      },
+      "sortKey": null,
+      "projectionType": "ALL",
+      "description": "Lookup tenant by email address"
+    },
+    {
+      "indexName": "TenantStatusIndex",
+      "partitionKey": {
+        "name": "status",
+        "type": "S"
+      },
+      "sortKey": {
+        "name": "dateCreated",
+        "type": "S"
+      },
+      "projectionType": "ALL",
+      "description": "List tenants by status, sorted by creation date"
+    },
+    {
+      "indexName": "ActiveIndex",
+      "partitionKey": {
+        "name": "active",
+        "type": "BOOL"
+      },
+      "sortKey": {
+        "name": "dateCreated",
+        "type": "S"
+      },
+      "projectionType": "ALL",
+      "description": "Filter tenants by active status"
+    }
+  ],
+  "capacityMode": "ON_DEMAND",
+  "pitr": {
+    "enabled": true,
+    "description": "Point-in-time recovery enabled for all environments"
+  },
+  "backup": {
+    "dev": {
+      "frequency": "daily",
+      "retention": 7
+    },
+    "sit": {
+      "frequency": "daily",
+      "retention": 14
+    },
+    "prod": {
+      "frequency": "hourly",
+      "retention": 90
+    }
+  },
+  "streams": {
+    "enabled": true,
+    "viewType": "NEW_AND_OLD_IMAGES",
+    "description": "Change data capture for auditing"
+  },
+  "tags": {
+    "Project": "2.1",
+    "Application": "CustomerPortalPublic",
+    "Component": "dynamodb",
+    "ManagedBy": "Terraform"
+  }
+}

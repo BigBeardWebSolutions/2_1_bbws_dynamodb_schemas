@@ -1,0 +1,178 @@
+{
+  "tableName": "campaigns",
+  "description": "Marketing campaigns with time-based validity",
+  "primaryKey": {
+    "partitionKey": {
+      "name": "PK",
+      "type": "S",
+      "pattern": "CAMPAIGN#{code}"
+    },
+    "sortKey": {
+      "name": "SK",
+      "type": "S",
+      "pattern": "METADATA"
+    }
+  },
+  "attributes": [
+    {
+      "name": "PK",
+      "type": "S",
+      "required": true,
+      "description": "Partition key: CAMPAIGN#{code}"
+    },
+    {
+      "name": "SK",
+      "type": "S",
+      "required": true,
+      "description": "Sort key: METADATA"
+    },
+    {
+      "name": "id",
+      "type": "S",
+      "required": true,
+      "description": "Unique campaign identifier (UUID v4)"
+    },
+    {
+      "name": "code",
+      "type": "S",
+      "required": true,
+      "description": "Campaign code (e.g., SUMMER2025)"
+    },
+    {
+      "name": "description",
+      "type": "S",
+      "required": true,
+      "description": "Campaign description"
+    },
+    {
+      "name": "discountPercentage",
+      "type": "N",
+      "required": true,
+      "description": "Discount percentage (0-100)"
+    },
+    {
+      "name": "productId",
+      "type": "S",
+      "required": true,
+      "description": "Associated product UUID"
+    },
+    {
+      "name": "termsConditionsLink",
+      "type": "S",
+      "required": true,
+      "description": "URL to campaign T&C"
+    },
+    {
+      "name": "fromDate",
+      "type": "S",
+      "required": true,
+      "format": "ISO 8601 date (YYYY-MM-DD)",
+      "description": "Campaign start date"
+    },
+    {
+      "name": "toDate",
+      "type": "S",
+      "required": true,
+      "format": "ISO 8601 date (YYYY-MM-DD)",
+      "description": "Campaign end date"
+    },
+    {
+      "name": "active",
+      "type": "BOOL",
+      "required": true,
+      "default": true,
+      "description": "Soft delete flag"
+    },
+    {
+      "name": "dateCreated",
+      "type": "S",
+      "required": true,
+      "format": "ISO 8601",
+      "description": "Creation timestamp"
+    },
+    {
+      "name": "dateLastUpdated",
+      "type": "S",
+      "required": true,
+      "format": "ISO 8601",
+      "description": "Last update timestamp"
+    },
+    {
+      "name": "lastUpdatedBy",
+      "type": "S",
+      "required": true,
+      "description": "Admin email that made last update"
+    }
+  ],
+  "globalSecondaryIndexes": [
+    {
+      "indexName": "CampaignActiveIndex",
+      "partitionKey": {
+        "name": "active",
+        "type": "BOOL"
+      },
+      "sortKey": {
+        "name": "fromDate",
+        "type": "S"
+      },
+      "projectionType": "ALL",
+      "description": "List active campaigns sorted by start date"
+    },
+    {
+      "indexName": "CampaignProductIndex",
+      "partitionKey": {
+        "name": "productId",
+        "type": "S"
+      },
+      "sortKey": {
+        "name": "fromDate",
+        "type": "S"
+      },
+      "projectionType": "ALL",
+      "description": "List campaigns by product"
+    },
+    {
+      "indexName": "ActiveIndex",
+      "partitionKey": {
+        "name": "active",
+        "type": "BOOL"
+      },
+      "sortKey": {
+        "name": "dateCreated",
+        "type": "S"
+      },
+      "projectionType": "ALL",
+      "description": "Filter campaigns by active status"
+    }
+  ],
+  "capacityMode": "ON_DEMAND",
+  "pitr": {
+    "enabled": true,
+    "description": "Point-in-time recovery enabled for all environments"
+  },
+  "backup": {
+    "dev": {
+      "frequency": "daily",
+      "retention": 7
+    },
+    "sit": {
+      "frequency": "daily",
+      "retention": 14
+    },
+    "prod": {
+      "frequency": "hourly",
+      "retention": 90
+    }
+  },
+  "streams": {
+    "enabled": true,
+    "viewType": "NEW_AND_OLD_IMAGES",
+    "description": "Campaign modification auditing"
+  },
+  "tags": {
+    "Project": "2.1",
+    "Application": "CustomerPortalPublic",
+    "Component": "dynamodb",
+    "ManagedBy": "Terraform"
+  }
+}

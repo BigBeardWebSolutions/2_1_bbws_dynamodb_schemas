@@ -1,0 +1,152 @@
+{
+  "tableName": "products",
+  "description": "Product catalog with pricing and features",
+  "primaryKey": {
+    "partitionKey": {
+      "name": "PK",
+      "type": "S",
+      "pattern": "PRODUCT#{productId}"
+    },
+    "sortKey": {
+      "name": "SK",
+      "type": "S",
+      "pattern": "METADATA"
+    }
+  },
+  "attributes": [
+    {
+      "name": "PK",
+      "type": "S",
+      "required": true,
+      "description": "Partition key: PRODUCT#{productId}"
+    },
+    {
+      "name": "SK",
+      "type": "S",
+      "required": true,
+      "description": "Sort key: METADATA"
+    },
+    {
+      "name": "id",
+      "type": "S",
+      "required": true,
+      "description": "Unique product identifier (UUID v4)"
+    },
+    {
+      "name": "name",
+      "type": "S",
+      "required": true,
+      "description": "Product name"
+    },
+    {
+      "name": "description",
+      "type": "S",
+      "required": true,
+      "description": "Product description"
+    },
+    {
+      "name": "price",
+      "type": "N",
+      "required": true,
+      "description": "Product price in ZAR (decimal)"
+    },
+    {
+      "name": "features",
+      "type": "L",
+      "required": false,
+      "description": "Array of feature strings"
+    },
+    {
+      "name": "billingCycle",
+      "type": "S",
+      "required": true,
+      "enum": ["monthly", "yearly"],
+      "description": "Billing frequency"
+    },
+    {
+      "name": "active",
+      "type": "BOOL",
+      "required": true,
+      "default": true,
+      "description": "Soft delete flag"
+    },
+    {
+      "name": "dateCreated",
+      "type": "S",
+      "required": true,
+      "format": "ISO 8601",
+      "description": "Creation timestamp"
+    },
+    {
+      "name": "dateLastUpdated",
+      "type": "S",
+      "required": true,
+      "format": "ISO 8601",
+      "description": "Last update timestamp"
+    },
+    {
+      "name": "lastUpdatedBy",
+      "type": "S",
+      "required": true,
+      "description": "Admin email that made last update"
+    }
+  ],
+  "globalSecondaryIndexes": [
+    {
+      "indexName": "ProductActiveIndex",
+      "partitionKey": {
+        "name": "active",
+        "type": "BOOL"
+      },
+      "sortKey": {
+        "name": "dateCreated",
+        "type": "S"
+      },
+      "projectionType": "ALL",
+      "description": "List active products"
+    },
+    {
+      "indexName": "ActiveIndex",
+      "partitionKey": {
+        "name": "active",
+        "type": "BOOL"
+      },
+      "sortKey": {
+        "name": "dateCreated",
+        "type": "S"
+      },
+      "projectionType": "ALL",
+      "description": "Filter products by active status"
+    }
+  ],
+  "capacityMode": "ON_DEMAND",
+  "pitr": {
+    "enabled": true,
+    "description": "Point-in-time recovery enabled for all environments"
+  },
+  "backup": {
+    "dev": {
+      "frequency": "daily",
+      "retention": 7
+    },
+    "sit": {
+      "frequency": "daily",
+      "retention": 14
+    },
+    "prod": {
+      "frequency": "hourly",
+      "retention": 90
+    }
+  },
+  "streams": {
+    "enabled": true,
+    "viewType": "NEW_AND_OLD_IMAGES",
+    "description": "Price change auditing"
+  },
+  "tags": {
+    "Project": "2.1",
+    "Application": "CustomerPortalPublic",
+    "Component": "dynamodb",
+    "ManagedBy": "Terraform"
+  }
+}
