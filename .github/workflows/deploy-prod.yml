@@ -1,0 +1,279 @@
+# ============================================================================
+# PROD DEPLOYMENT WORKFLOW - Deploy with Strict Approval
+# ============================================================================
+# Purpose: Deploy infrastructure to PROD with multi-stage approval
+# Trigger: Manual workflow dispatch ONLY
+# Environment: PROD only (093646564004 / af-south-1)
+# Approval Required: Yes - MANDATORY manual approval before apply
+# DR: Cross-region replication to eu-west-1 (Ireland)
+# ============================================================================
+
+name: Deploy to PROD
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: 'Component to deploy'
+        type: choice
+        required: true
+        options:
+          - dynamodb
+      skip_validation:
+        description: 'Skip post-deployment validation'
+        type: boolean
+        required: false
+        default: false
+      confirmation:
+        description: 'Type "DEPLOY-TO-PROD" to confirm'
+        required: true
+        type: string
+
+# Permissions for OIDC authentication
+permissions:
+  id-token: write    # Required for AWS OIDC authentication
+  contents: read     # Required to checkout code
+  actions: read      # Required for artifacts
+
+env:
+  AWS_REGION: af-south-1
+  AWS_ACCOUNT_ID: '093646564004'
+  ENVIRONMENT: prod
+  TF_VERSION: 1.6.0
+
+jobs:
+  # --------------------------------------------------------------------------
+  # JOB 0: VALIDATION CHECK
+  # --------------------------------------------------------------------------
+  validate:
+    name: Validate Deployment Request
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate confirmation input
+        run: |
+          if [ "${{ github.event.inputs.confirmation }}" != "DEPLOY-TO-PROD" ]; then
+            echo "❌ ERROR: Confirmation text must be exactly 'DEPLOY-TO-PROD'"
+            echo "Received: '${{ github.event.inputs.confirmation }}'"
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
+
+      - name: Display deployment info
+        run: |
+          echo "=================================================="
+          echo "PRODUCTION DEPLOYMENT REQUEST"
+          echo "=================================================="
+          echo "Environment: PROD"
+          echo "Account: ${{ env.AWS_ACCOUNT_ID }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "Component: ${{ github.event.inputs.component }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "=================================================="
+
+  # --------------------------------------------------------------------------
+  # JOB 1: TERRAFORM PLAN
+  # --------------------------------------------------------------------------
+  plan:
+    name: Terraform Plan (PROD)
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-plan-prod
+
+      - name: Verify AWS identity
+        run: |
+          echo "=================================================="
+          echo "AWS IDENTITY VERIFICATION - PROD"
+          echo "=================================================="
+          echo "Account ID: $(aws sts get-caller-identity --query Account --output text)"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "Environment: ${{ env.ENVIRONMENT }}"
+          echo "=================================================="
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform init
+        working-directory: terraform/dynamodb
+        run: |
+          terraform init \
+            -backend-config="bucket=bbws-terraform-state-prod" \
+            -backend-config="key=2_1_bbws_dynamodb_schemas/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=terraform-state-lock-prod" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform plan
+        id: plan
+        working-directory: terraform/dynamodb
+        run: |
+          terraform plan \
+            -var-file=environments/prod.tfvars \
+            -input=false \
+            -out=tfplan \
+            -no-color \
+            | tee plan_output.txt
+
+      - name: Display plan summary
+        working-directory: terraform/dynamodb
+        run: |
+          echo "=================================================="
+          echo "TERRAFORM PLAN SUMMARY - PROD"
+          echo "=================================================="
+          grep -E "Plan:|No changes" plan_output.txt || echo "See full plan above"
+          echo "=================================================="
+          echo ""
+          echo "⚠️  WARNING: This will deploy to PRODUCTION"
+          echo "⚠️  Account: ${{ env.AWS_ACCOUNT_ID }}"
+          echo "⚠️  Region: ${{ env.AWS_REGION }}"
+
+      - name: Upload terraform plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-prod-${{ github.run_number }}
+          path: terraform/dynamodb/tfplan
+          retention-days: 30
+
+  # --------------------------------------------------------------------------
+  # JOB 2: MANUAL APPROVAL GATE (PRODUCTION)
+  # --------------------------------------------------------------------------
+  approval:
+    name: Approve PROD Deployment
+    runs-on: ubuntu-latest
+    needs: plan
+    environment:
+      name: prod-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: Production approval checkpoint
+        run: |
+          echo "=================================================="
+          echo "⚠️  PRODUCTION DEPLOYMENT APPROVAL ⚠️"
+          echo "=================================================="
+          echo "Environment: PRODUCTION"
+          echo "Account: ${{ env.AWS_ACCOUNT_ID }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo ""
+          echo "THIS WILL MODIFY PRODUCTION INFRASTRUCTURE"
+          echo ""
+          echo "Deployment approved by: ${{ github.actor }}"
+          echo "Approval time: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          echo "=================================================="
+
+  # --------------------------------------------------------------------------
+  # JOB 3: TERRAFORM APPLY
+  # --------------------------------------------------------------------------
+  apply:
+    name: Deploy to PROD
+    runs-on: ubuntu-latest
+    needs: approval
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-deploy-prod
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform init
+        working-directory: terraform/dynamodb
+        run: |
+          terraform init \
+            -backend-config="bucket=bbws-terraform-state-prod" \
+            -backend-config="key=2_1_bbws_dynamodb_schemas/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=terraform-state-lock-prod" \
+            -backend-config="encrypt=true"
+
+      - name: Download terraform plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-prod-${{ github.run_number }}
+          path: terraform/dynamodb/
+
+      - name: Terraform apply
+        working-directory: terraform/dynamodb
+        run: |
+          echo "⚠️  Applying terraform plan to PRODUCTION..."
+          terraform apply -auto-approve tfplan
+
+      - name: Capture terraform outputs
+        id: outputs
+        working-directory: terraform/dynamodb
+        run: |
+          echo "=================================================="
+          echo "TERRAFORM OUTPUTS - PROD"
+          echo "=================================================="
+          terraform output -json | tee outputs.json
+          terraform output
+          echo "=================================================="
+
+      - name: Upload deployment outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynamodb-deployment-outputs-prod-${{ github.run_number }}
+          path: terraform/dynamodb/outputs.json
+          retention-days: 365
+
+  # --------------------------------------------------------------------------
+  # JOB 4: DEPLOYMENT SUMMARY
+  # --------------------------------------------------------------------------
+  summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [validate, plan, approval, apply]
+    if: always()
+
+    steps:
+      - name: Generate deployment summary
+        run: |
+          echo "=================================================="
+          echo "PRODUCTION DEPLOYMENT SUMMARY"
+          echo "=================================================="
+          echo "Environment: PRODUCTION"
+          echo "AWS Account: ${{ env.AWS_ACCOUNT_ID }}"
+          echo "Primary Region: ${{ env.AWS_REGION }}"
+          echo "DR Region: eu-west-1"
+          echo ""
+          echo "Job Results:"
+          echo "  Validation: ${{ needs.validate.result }}"
+          echo "  Plan: ${{ needs.plan.result }}"
+          echo "  Approval: ${{ needs.approval.result }}"
+          echo "  Apply: ${{ needs.apply.result }}"
+          echo ""
+          echo "Workflow Run: ${{ github.run_id }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "=================================================="
+
+          # Check if any job failed
+          if [ "${{ needs.validate.result }}" == "failure" ] || \
+             [ "${{ needs.plan.result }}" == "failure" ] || \
+             [ "${{ needs.approval.result }}" == "failure" ] || \
+             [ "${{ needs.apply.result }}" == "failure" ]; then
+            echo "❌ DEPLOYMENT FAILED - Check job logs above"
+            exit 1
+          else
+            echo "✅ PRODUCTION DEPLOYMENT SUCCESSFUL"
+          fi
